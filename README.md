@@ -49,14 +49,22 @@ dummy windows before it ever touches a real app.
 
 ## Development
 
-The app moves real windows, so it is developed and tested in a **macOS virtual machine**, never on the host Mac.
+The app moves real windows, so it is **built on the host Mac but only ever run inside a macOS virtual machine**.
+Building just produces the `.app` file. Neither Xcode nor any developer tools are needed in the VM.
 
-1. Install [UTM](https://mac.getutm.app): `brew install --cask utm`
-2. Create the VM: **Virtualize → macOS 12+**. Give it about 6 cores, 12 GB RAM and a 120 GB disk.
-3. Install Xcode inside the VM, then clone this repo there.
-4. Keep a copy of the clean `.utm` bundle as a restore point.
+1. On the host, install the Command Line Tools: `xcode-select --install`
+2. Install [UTM](https://mac.getutm.app) (`brew install --cask utm`) and create a VM: **Virtualize → macOS 12+**.
+   Use a macOS version no newer than the host's.
+3. In the VM, turn on **System Settings → General → Sharing → Remote Login**.
+4. On the host, run `scripts/vm-ssh-setup.sh` to set up passwordless SSH under the alias `fractalvm`.
+5. Build on the host, copy the app over, and run it in the VM:
+   ```
+   swift build -c release && scripts/bundle.sh
+   scp -r build/fractalWM.app fractalvm:~/Applications/
+   ssh fractalvm open ~/Applications/fractalWM.app
+   ```
 
-Build instructions will be added once the Xcode project exists.
+The Swift package and `scripts/bundle.sh` will be added with the first milestone.
 
 ## Roadmap
 

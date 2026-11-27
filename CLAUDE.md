@@ -5,8 +5,8 @@ the user zoom into any part of that tree. It is for personal use only.
 
 ## Hard rules
 
-- **Never run the app on the host Mac.** It moves real windows. All running and testing happens inside a UTM
-  macOS VM. Write code, then tell the user what to build and run there.
+- **Never run the app on the host Mac.** It moves real windows. Building on the host is fine, because that only
+  produces the `.app` file. Launching and testing happen only inside the UTM macOS VM (see Dev loop).
 - **`reference/` is read-only and gitignored.** `reference/trellis/` is a clone of DanFessler/trellis, a web layout
   engine with a source-available, non-commercial license. Read it for ideas only. Never copy its code into this
   repo, and never reuse the "Trellis" name or branding.
@@ -17,6 +17,8 @@ the user zoom into any part of that tree. It is for personal use only.
 ## Stack
 
 - Swift with AppKit. A menu-bar app (`LSUIElement = YES`) with no Dock icon.
+- Build with Swift Package Manager and the Command Line Tools only. Xcode is not used. `scripts/bundle.sh` wraps
+  the built binary into `fractalWM.app` with an `Info.plist` and signs it.
 - Targets macOS 14+ on Apple silicon.
 - App Sandbox is **off**, because the Accessibility API requires that.
 - Global hotkeys come from the `KeyboardShortcuts` Swift package.
@@ -101,6 +103,21 @@ Keep these layers separate. The model and the layout engine never import AppKit.
 
 ## Dev loop
 
-- Develop in Xcode inside the UTM macOS VM.
-- Sign with a fixed development team, so the Accessibility grant survives rebuilds.
+Build on the host Mac, run in the VM:
+
+```
+host:  swift build -c release && scripts/bundle.sh     # produces build/fractalWM.app; nothing is launched
+host:  scp -r build/fractalWM.app fractalvm:~/Applications/
+host:  ssh fractalvm open ~/Applications/fractalWM.app  # runs inside the VM only
+```
+
+- **The VM** is a stock macOS 26.5.1 install with no developer tools. It's reachable over passwordless SSH as
+  `fractalvm`, an alias in `~/.ssh/config` set up by `scripts/vm-ssh-setup.sh`.
+- **VM limits:** the disk is small (about 5 GB free), so never install anything into it, and keep automatic
+  updates off. The VM's macOS must never be newer than the host's.
+- **Signing:** `scripts/bundle.sh` signs with a fixed self-signed certificate from the host's Keychain (one-time
+  setup). That keeps the VM's Accessibility grant valid across rebuilds. Ad-hoc signing would reset it every
+  time.
+- **Pure logic** (`LayoutTree`, the layout engine) has no AppKit, so its unit tests can run on the host. They
+  never touch windows.
 - Keep a clean duplicate of the VM's `.utm` bundle as a restore point.

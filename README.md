@@ -60,15 +60,14 @@ Building just produces the `.app` file. Neither Xcode nor any developer tools ar
 5. Build on the host, copy the app over, and run it in the VM:
    ```
    swift build -c release && scripts/bundle.sh
-   scp -r build/fractalWM.app fractalvm:~/Applications/
-   ssh fractalvm open ~/Applications/fractalWM.app
+   scripts/run-in-vm.sh
    ```
 
-The Swift package and `scripts/bundle.sh` will be added with the first milestone.
+The kill switch is **⌃⌥⌘F**. It floats all windows and stops managing them.
 
 ## Roadmap
 
-- [ ] Menu-bar app with a kill switch, and dummy test windows
+- [x] Menu-bar app with a kill switch, and dummy test windows
 - [ ] Layout tree with unit tests, and the layout engine
 - [ ] Seam resizing and drag-to-dock
 - [ ] Tab groups, zoom navigation and keyboard navigation

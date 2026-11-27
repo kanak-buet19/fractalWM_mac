@@ -5,6 +5,14 @@ the user zoom into any part of that tree. It is for personal use only.
 
 ## Hard rules
 
+- **Claude may compile, run and test without asking in this project.** This overrides the user's global "never
+  run or compile" rule, but only within these limits:
+  - **On the host:** compiling only (`swift build`, `swift test` for pure-logic tests, `scripts/bundle.sh`).
+    These produce files and never launch the app.
+  - **In the VM (`ssh fractalvm`):** launching and testing (`scripts/run-in-vm.sh`), taking screenshots,
+    reading window positions, sending input, and using passwordless `sudo` there.
+  - Never launch the app or send synthetic input on the host.
+
 - **Never run the app on the host Mac.** It moves real windows. Building on the host is fine, because that only
   produces the `.app` file. Launching and testing happen only inside the UTM macOS VM (see Dev loop).
 - **`reference/` is read-only and gitignored.** `reference/trellis/` is a clone of DanFessler/trellis, a web layout
@@ -21,8 +29,9 @@ the user zoom into any part of that tree. It is for personal use only.
   the built binary into `fractalWM.app` with an `Info.plist` and signs it.
 - Targets macOS 14+ on Apple silicon.
 - App Sandbox is **off**, because the Accessibility API requires that.
-- Global hotkeys come from the `KeyboardShortcuts` Swift package.
-- No other dependencies unless clearly justified.
+- Global hotkeys use Carbon's `RegisterEventHotKey` (`Sources/FractalWM/HotKey.swift`), so there are no
+  dependencies. Add a dependency only when it is clearly justified.
+- The kill switch is ⌃⌥⌘F.
 
 ## Features
 
@@ -107,8 +116,7 @@ Build on the host Mac, run in the VM:
 
 ```
 host:  swift build -c release && scripts/bundle.sh     # produces build/fractalWM.app; nothing is launched
-host:  scp -r build/fractalWM.app fractalvm:~/Applications/
-host:  ssh fractalvm open ~/Applications/fractalWM.app  # runs inside the VM only
+host:  scripts/run-in-vm.sh                            # copies the app into the VM and launches it there
 ```
 
 - **The VM** is a stock macOS 26.5.1 install with no developer tools. It's reachable over passwordless SSH as
@@ -118,6 +126,16 @@ host:  ssh fractalvm open ~/Applications/fractalWM.app  # runs inside the VM onl
 - **Signing:** `scripts/bundle.sh` signs with a fixed self-signed certificate from the host's Keychain (one-time
   setup). That keeps the VM's Accessibility grant valid across rebuilds. Ad-hoc signing would reset it every
   time.
+- **VM test tools**, all run from the host:
+  - `scripts/vm-windows.sh` prints fractalWM's window frames and the screen size. It needs no permissions.
+  - `scripts/vm-screenshot.sh` saves a screenshot to `build/vm-shot.png`.
+  - `scripts/vm-input.sh key f control,option,command` presses keys.
+  - `scripts/vm-input.sh menu "Retile"` clicks a fractalWM menu item.
+  - The screenshot and input tools need Screen Recording and Accessibility for `sshd-keygen-wrapper` in the VM.
+    `scripts/vm-grant-permissions.sh` walks through granting them.
+  - Verify behavior by comparing frames from `vm-windows.sh` with the expected layout, and use screenshots for
+    visual checks.
+- **The VM screen** is fixed at 1920×1200 (dynamic resolution off).
 - **Pure logic** (`LayoutTree`, the layout engine) has no AppKit, so its unit tests can run on the host. They
   never touch windows.
 - Keep a clean duplicate of the VM's `.utm` bundle as a restore point.

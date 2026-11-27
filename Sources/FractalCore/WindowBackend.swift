@@ -20,6 +20,31 @@ public struct ManagedWindow: Equatable, Sendable {
     }
 }
 
+/// What a window's stand-in looks like while it moves.
+public struct WindowAppearance {
+    /// Placeholder fill: the app's color.
+    public var color: CGColor
+    /// Placeholder label (an app name or number) when there is no icon or snapshot.
+    public var label: String
+    /// A picture of the whole window, title bar included. When present, the stand-in is built from it
+    /// instead of the placeholder.
+    public var snapshot: CGImage?
+    /// Height of the title bar in points (0 if none). The stand-in keeps it at this height.
+    public var titleBarHeight: CGFloat
+    /// Pixels per point in `snapshot` (2 on Retina).
+    public var scale: CGFloat
+
+    public init(
+        color: CGColor, label: String, snapshot: CGImage? = nil, titleBarHeight: CGFloat = 0, scale: CGFloat = 1
+    ) {
+        self.color = color
+        self.label = label
+        self.snapshot = snapshot
+        self.titleBarHeight = titleBarHeight
+        self.scale = scale
+    }
+}
+
 /// The only way the window manager touches windows. The rest of the app never knows whether
 /// it is driving its own dummy windows or real app windows.
 ///
@@ -31,4 +56,8 @@ public protocol WindowBackend: AnyObject {
     func windows() -> [ManagedWindow]
     func setFrame(_ id: WindowID, _ frame: CGRect)
     func focus(_ id: WindowID)
+    /// How to draw this window's stand-in during motion. Nil if the window is gone.
+    func appearance(of id: WindowID) -> WindowAppearance?
+    /// Hides or shows the real window while its stand-in moves.
+    func setHidden(_ id: WindowID, _ hidden: Bool)
 }

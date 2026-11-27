@@ -25,6 +25,10 @@ Zoom back out to see the whole workspace again.
 - **URL commands:** `fractalwm://view?n=1` and similar URLs let Raycast, Alfred, Shortcuts, Stream Deck or a
   script drive it.
 - **Float all:** one command undocks everything and gives you a normal Mac back.
+- **Fluid motion:** every split, dock and close glides into place with one shared motion. Moving windows show a
+  snapshot, or a color-and-icon placeholder when Screen Recording isn't granted.
+- **Setup check:** detects macOS features that fight a window manager (edge tiling, click-wallpaper-to-reveal,
+  Stage Manager) and offers to turn them off.
 
 ## Requirements
 
@@ -68,7 +72,7 @@ The kill switch is **⌃⌥⌘F**. It floats all windows and stops managing them
 ## Roadmap
 
 - [x] Menu-bar app with a kill switch, and dummy test windows
-- [ ] Layout tree with unit tests, and the layout engine
+- [x] Layout tree with unit tests, the layout engine, and placeholder motion
 - [ ] Seam resizing and drag-to-dock
 - [ ] Tab groups, zoom navigation and keyboard navigation
 - [ ] Accessibility backend for real windows

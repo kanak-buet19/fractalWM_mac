@@ -8,16 +8,26 @@ final class DummyBackend: WindowBackend {
     private var windowsByID: [WindowID: NSWindow] = [:]
     private var order: [WindowID] = []
     private var nextID = 1
-    private var closeObservers: [WindowID: NSObjectProtocol] = [:]
+    private var observers: [WindowID: [NSObjectProtocol]] = [:]
+    /// True while this backend is moving windows itself, so those moves aren't reported as the user's.
+    private var applyingFrames = false
+
+    /// Called when the user moves or resizes a window (not when the app does).
+    var onUserChange: ((WindowID) -> Void)?
 
     private static let colors: [NSColor] = [
         .systemRed, .systemOrange, .systemYellow, .systemGreen, .systemBlue, .systemPurple,
         .systemPink, .systemTeal, .systemIndigo, .systemBrown,
     ]
 
+    /// Called after the user closes a dummy window.
+    var onClose: ((WindowID) -> Void)?
+
     /// Creates `count` new dummy windows, cascaded so they visibly overlap until tiled.
-    func spawn(count: Int) {
+    @discardableResult
+    func spawn(count: Int) -> [WindowID] {
         let screen = NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1280, height: 800)
+        var created: [WindowID] = []
         for _ in 0..<count {
             let id = WindowID(nextID)
             nextID += 1
@@ -30,24 +40,41 @@ final class DummyBackend: WindowBackend {
             windowsByID[id] = window
             order.append(id)
 
-            closeObservers[id] = NotificationCenter.default.addObserver(
-                forName: NSWindow.willCloseNotification, object: window, queue: .main
-            ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.forget(id) }
+            // queue: nil runs the blocks synchronously on the posting thread, which for AppKit window
+            // notifications is the main thread. That keeps `applyingFrames` accurate.
+            let center = NotificationCenter.default
+            var tokens = [
+                center.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: nil) {
+                    [weak self] _ in
+                    MainActor.assumeIsolated { self?.forget(id) }
+                },
+            ]
+            for name in [NSWindow.didMoveNotification, NSWindow.didResizeNotification] {
+                tokens.append(center.addObserver(forName: name, object: window, queue: nil) { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        guard let self, !self.applyingFrames else { return }
+                        self.onUserChange?(id)
+                    }
+                })
             }
+            observers[id] = tokens
             window.orderFront(nil)
+            created.append(id)
         }
+        return created
     }
 
-    /// Puts every window back into an overlapping cascade (used by "Float All").
-    func cascade() {
+    /// Frames for an overlapping cascade of every window (used by "Float All").
+    func cascadeFrames() -> [WindowID: CGRect] {
         let screen = NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1280, height: 800)
+        var frames: [WindowID: CGRect] = [:]
         for (index, id) in order.enumerated() {
             let offset = CGFloat(index) * 28
-            setFrame(id, CGRect(
+            frames[id] = CGRect(
                 x: screen.minX + 60 + offset, y: screen.maxY - 360 - offset, width: 420, height: 300
-            ))
+            )
         }
+        return frames
     }
 
     // MARK: WindowBackend
@@ -60,6 +87,8 @@ final class DummyBackend: WindowBackend {
     }
 
     func setFrame(_ id: WindowID, _ frame: CGRect) {
+        applyingFrames = true
+        defer { applyingFrames = false }
         windowsByID[id]?.setFrame(frame, display: true, animate: false)
     }
 
@@ -68,14 +97,45 @@ final class DummyBackend: WindowBackend {
         windowsByID[id]?.makeKeyAndOrderFront(nil)
     }
 
+    func appearance(of id: WindowID) -> WindowAppearance? {
+        guard let window = windowsByID[id] else { return nil }
+        let titleBarHeight = window.frame.height - window.contentRect(forFrameRect: window.frame).height
+        return WindowAppearance(
+            color: Self.color(for: id).cgColor,
+            label: "\(id.raw)",
+            snapshot: Self.snapshot(of: window),
+            titleBarHeight: titleBarHeight,
+            scale: window.backingScaleFactor
+        )
+    }
+
+    /// Renders the whole window, title bar included, by drawing its frame view (the content view's
+    /// superview). This only works for the app's own windows; real apps' windows will need ScreenCaptureKit.
+    private static func snapshot(of window: NSWindow) -> CGImage? {
+        guard let frameView = window.contentView?.superview else { return nil }
+        let bounds = frameView.bounds
+        guard let rep = frameView.bitmapImageRepForCachingDisplay(in: bounds) else { return nil }
+        frameView.cacheDisplay(in: bounds, to: rep)
+        return rep.cgImage
+    }
+
+    func setHidden(_ id: WindowID, _ hidden: Bool) {
+        windowsByID[id]?.alphaValue = hidden ? 0 : 1
+    }
+
+    private static func color(for id: WindowID) -> NSColor {
+        colors[(id.raw - 1) % colors.count]
+    }
+
     // MARK: Private
 
     private func forget(_ id: WindowID) {
         windowsByID[id] = nil
         order.removeAll { $0 == id }
-        if let observer = closeObservers.removeValue(forKey: id) {
-            NotificationCenter.default.removeObserver(observer)
+        for token in observers.removeValue(forKey: id) ?? [] {
+            NotificationCenter.default.removeObserver(token)
         }
+        onClose?(id)
     }
 
     private func makeWindow(id: WindowID, frame: CGRect) -> NSWindow {
@@ -88,7 +148,7 @@ final class DummyBackend: WindowBackend {
         window.isReleasedWhenClosed = false
         window.title = "Dummy \(id.raw)"
 
-        let color = DummyBackend.colors[(id.raw - 1) % DummyBackend.colors.count]
+        let color = Self.color(for: id)
         let content = NSView()
         content.wantsLayer = true
         content.layer?.backgroundColor = color.withAlphaComponent(0.85).cgColor

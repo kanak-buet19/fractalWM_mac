@@ -57,6 +57,13 @@ feature is included and there is no window limit.
   `fractalwm://float-all`. These let Raycast, Alfred, Shortcuts, Stream Deck and the shell drive the app.
 - **Float all windows.** One command undocks every window and returns to a normal Mac. This is also the kill
   switch.
+- **Fluid motion.** Every split, dock, close and snap-back uses one shared motion: about 460 ms, ease-out.
+  Stand-ins draw the moving windows: a snapshot when Screen Recording is granted, otherwise a placeholder in the
+  app's color with its icon. The real window is hidden during the motion and placed once, at the end.
+- **Small-window placeholder.** A window squeezed below its app's minimum size is covered by its color-and-icon
+  placeholder until there is room again.
+- **Setup check.** On first launch, and from the menu, the app detects macOS features that move windows on
+  their own: edge tiling, "Click wallpaper to reveal desktop" and Stage Manager. It offers to turn them off.
 
 ## Architecture
 
@@ -76,6 +83,8 @@ Keep these layers separate. The model and the layout engine never import AppKit.
        func windows() -> [ManagedWindow]
        func setFrame(_ id: WindowID, _ frame: CGRect)
        func focus(_ id: WindowID)
+       func appearance(of id: WindowID) -> WindowAppearance?  // color, label/icon, optional snapshot
+       func setHidden(_ id: WindowID, _ hidden: Bool)          // hide during motion
    }
    ```
    - `DummyBackend` uses colored `NSWindow`s the app creates itself. It needs no permissions and is the default
@@ -97,15 +106,23 @@ Keep these layers separate. The model and the layout engine never import AppKit.
    windows on restore by bundle ID, then title, then order.
 8. **Kill switch.** A hotkey plus a menu item that stops managing windows and "floats all". Build it in the first
    milestone.
+9. **Motion (`Animator`, app target).** Every layout change goes through it.
+   - It finishes any running motion and reads current frames.
+   - For each window that moves, it puts a borderless stand-in window at the old frame and hides the real window.
+   - It animates the stand-ins to their new frames, then places the real windows and removes the stand-ins.
+   - Stand-ins show `appearance.snapshot` when one exists, otherwise a color-and-label placeholder.
+   - "Hidden" depends on the backend. `DummyBackend` sets alpha to 0. `AXBackend` parks the window off-screen,
+     because the Accessibility API can't change another app's alpha.
+   - Never step real windows frame by frame through the Accessibility API; it is jerky.
 
 ## Milestones
 
 1. Menu-bar app with the kill switch, and `DummyBackend` spawning 6 colored windows.
-2. `LayoutTree` with unit tests, and the layout engine tiling the dummy windows.
+2. `LayoutTree` with unit tests, the layout engine tiling the dummy windows, and placeholder motion.
 3. Seam resize and drag-to-dock on dummy windows.
 4. Tab groups, zoom/viewport navigation, keyboard navigation and show-everything.
-5. `AXBackend`: permission prompt, listing windows, tiling real windows (in the VM only), and an allowlist of
-   bundle IDs to manage.
+5. `AXBackend`: permission prompt, listing windows, tiling real windows (in the VM only), an allowlist of
+   bundle IDs to manage, the setup check, and app color-and-icon placeholders.
 6. AX observers, persistence, and per-display arrangements across all displays.
 7. Saved views, menu-bar navigation (back/forward) and URL commands.
 8. Pinch zoom, plus live previews and animated zoom with ScreenCaptureKit.
@@ -136,6 +153,16 @@ host:  scripts/run-in-vm.sh                            # copies the app into the
   - Verify behavior by comparing frames from `vm-windows.sh` with the expected layout, and use screenshots for
     visual checks.
 - **The VM screen** is fixed at 1920×1200 (dynamic resolution off).
-- **Pure logic** (`LayoutTree`, the layout engine) has no AppKit, so its unit tests can run on the host. They
-  never touch windows.
+- **Pure logic** (`LayoutTree`, the layout engine) has no AppKit, so its unit tests run on the host and never
+  touch windows. Run them with `scripts/test.sh`, not plain `swift test`: the Command Line Tools keep Swift
+  Testing outside the default search path, and the script adds it. Tests use Swift Testing (`import Testing`),
+  not XCTest, which the Command Line Tools don't include.
+- **Slow motion:** to see or screenshot an animation mid-flight, run
+  `ssh fractalvm defaults write local.fractalwm AnimationDuration -float 4` and relaunch. Remove it afterwards with
+  `defaults delete local.fractalwm AnimationDuration`. Normal motion (0.46 s) is too fast to catch with
+  `screencapture`.
+- **Stand-ins never scale their picture.** The title bar keeps its height (traffic lights pinned left, title
+  centered), and the content is drawn at actual size and centered, with its edge color filling any gap.
+- **Debug snapshot:** the app writes its `managing` state and the tree summary (e.g. `H(1 | V(2 / 3))`) to
+  `/tmp/fractalwm-state.txt` in the VM. `scripts/vm-windows.sh` prints it.
 - Keep a clean duplicate of the VM's `.utm` bundle as a restore point.

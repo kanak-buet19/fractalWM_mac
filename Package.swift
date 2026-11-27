@@ -9,5 +9,7 @@ let package = Package(
         .target(name: "FractalCore"),
         // The menu-bar app.
         .executableTarget(name: "FractalWM", dependencies: ["FractalCore"]),
+        // Swift Testing (`import Testing`); runs on the host because FractalCore never touches windows.
+        .testTarget(name: "FractalCoreTests", dependencies: ["FractalCore"]),
     ]
 )

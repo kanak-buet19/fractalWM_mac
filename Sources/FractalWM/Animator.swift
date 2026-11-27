@@ -20,44 +20,59 @@ final class Animator {
     /// When false, layout changes apply instantly.
     var enabled = true
 
-    private struct Move {
-        let id: WindowID
-        let from: CGRect
-        let to: CGRect
-    }
-
-    private var pending: [Move] = []
-    private var standIns: [NSWindow] = []
+    /// Stand-ins currently on screen, and where each one's real window will land.
+    private var standIns: [WindowID: NSWindow] = [:]
+    private var destinations: [WindowID: CGRect] = [:]
     private var generation = 0
     private weak var backend: (any WindowBackend)?
 
     /// Moves windows to `targets`, animating the ones whose frame changes.
+    ///
+    /// If a motion is already running, windows continue from where their stand-ins are drawn right now
+    /// toward the new targets, so an interruption never jumps.
     func animate(to targets: [WindowID: CGRect], with backend: any WindowBackend) {
-        finishNow()
         self.backend = backend
+        generation += 1
+        let thisGeneration = generation
+        let live = Dictionary(uniqueKeysWithValues: backend.windows().map { ($0.id, $0.frame) })
 
-        let current = Dictionary(uniqueKeysWithValues: backend.windows().map { ($0.id, $0.frame) })
-        let moves = targets.compactMap { id, to in current[id].map { Move(id: id, from: $0, to: to) } }
-        let moving = moves.filter { $0.from != $0.to }
+        // Stand-ins whose window is gone or no longer has a target: land them now.
+        for (id, standIn) in Array(standIns) where targets[id] == nil || live[id] == nil {
+            land(id, standIn)
+        }
 
-        guard enabled, !moving.isEmpty else {
-            for move in moves { backend.setFrame(move.id, move.to) }
+        guard enabled else {
+            finishNow()
+            for (id, to) in targets where live[id] != nil { backend.setFrame(id, to) }
             return
         }
 
-        pending = moves
-        generation += 1
-        let thisGeneration = generation
-
         var flights: [(standIn: NSWindow, to: CGRect)] = []
-        for move in moving {
-            guard let look = backend.appearance(of: move.id) else { continue }
-            let standIn = Self.makeStandIn(look, frame: move.from)
-            standIn.orderFront(nil)
-            backend.setHidden(move.id, true)
-            standIns.append(standIn)
-            flights.append((standIn, move.to))
+        for (id, to) in targets {
+            guard let real = live[id] else { continue }
+            // Start from where the window is drawn right now: its stand-in if it's mid-flight.
+            let from = standIns[id]?.frame ?? real
+            if from == to {
+                if let standIn = standIns[id] { land(id, standIn) }
+                continue
+            }
+            let standIn: NSWindow
+            if let existing = standIns[id] {
+                standIn = existing
+            } else {
+                guard let look = backend.appearance(of: id) else {
+                    backend.setFrame(id, to)
+                    continue
+                }
+                standIn = Self.makeStandIn(look, frame: from)
+                standIn.orderFront(nil)
+                backend.setHidden(id, true)
+                standIns[id] = standIn
+            }
+            destinations[id] = to
+            flights.append((standIn, to))
         }
+        guard !flights.isEmpty else { return }
 
         NSAnimationContext.runAnimationGroup { context in
             context.duration = Self.duration
@@ -75,18 +90,17 @@ final class Animator {
 
     /// Jumps a running motion to its end: real windows at their final frames, stand-ins removed.
     func finishNow() {
-        if let backend {
-            for move in pending {
-                backend.setFrame(move.id, move.to)
-                backend.setHidden(move.id, false)
-            }
-        }
-        pending = []
-        for standIn in standIns {
-            standIn.orderOut(nil)
-            standIn.close()
-        }
-        standIns = []
+        for (id, standIn) in Array(standIns) { land(id, standIn) }
+    }
+
+    /// Places the real window at its destination, shows it, and removes its stand-in.
+    private func land(_ id: WindowID, _ standIn: NSWindow) {
+        if let to = destinations[id] { backend?.setFrame(id, to) }
+        backend?.setHidden(id, false)
+        standIn.orderOut(nil)
+        standIn.close()
+        standIns[id] = nil
+        destinations[id] = nil
     }
 
     private static func makeStandIn(_ look: WindowAppearance, frame: CGRect) -> NSWindow {

@@ -158,11 +158,12 @@ public struct LayoutTree: Equatable, Codable, Sendable {
         }
         guard let best else { return }
         let edge: Edge = best.rect.width >= best.rect.height ? .right : .bottom
-        self.root = Self.normalized(Self.placing(new, at: edge, of: best.id, in: root))
+        self.root = Self.normalized(Self.placing(new, at: edge, of: best.id, in: root, share: .halveTarget))
     }
 
     /// Docks `window` on `edge` of the node `target`. A window already in the tree is moved.
-    /// Docking on the root's edge makes the window span that whole side of the display.
+    /// Along the parent's axis the newcomer gets an equal share (1/(n+1)); across it, the target is
+    /// wrapped 50/50. Docking on the root's edge makes the window span that whole side of the display.
     public mutating func dock(_ window: WindowID, at edge: Edge, of target: NodeID) {
         guard var root, Self.find(target, in: root) != nil else { return }
         if let stack = stack(containing: window), stack.id == target, stack.windows.count == 1 {
@@ -170,7 +171,7 @@ public struct LayoutTree: Equatable, Codable, Sendable {
         }
         root = Self.removing(window, from: root)
         let new = Node.stack(Stack(windows: [window]))
-        self.root = Self.normalized(Self.placing(new, at: edge, of: target, in: root))
+        self.root = Self.normalized(Self.placing(new, at: edge, of: target, in: root, share: .equal))
     }
 
     /// Moves `window` into the stack `target` as a new tab and makes it active.
@@ -225,25 +226,50 @@ public struct LayoutTree: Equatable, Codable, Sendable {
         return nil
     }
 
+    /// How a newcomer takes space from siblings along the same axis.
+    enum Share {
+        /// The newcomer gets 1/(n+1) of the split; the others scale by n/(n+1). Used by `dock` (user drops).
+        case equal
+        /// The newcomer takes half of the target's share. Used by `insert` (automatic placement).
+        case halveTarget
+    }
+
     /// Inserts `new` beside `target`. If the target's parent already runs along the edge's axis, the
-    /// new node becomes a sibling that takes half the target's share; otherwise the target is wrapped
-    /// in a new split.
-    static func placing(_ new: Node, at edge: Edge, of target: NodeID, in node: Node) -> Node {
+    /// new node becomes a sibling; otherwise the target is wrapped in a new 50/50 split.
+    static func placing(_ new: Node, at edge: Edge, of target: NodeID, in node: Node, share: Share) -> Node {
         if node.id == target {
+            // Docking on the edge of a split that already runs this way: join it rather than wrap it.
+            if share == .equal, case .split(var split) = node, split.axis == edge.axis {
+                insertEqually(new, into: &split, at: edge.isLeading ? 0 : split.children.count)
+                return .split(split)
+            }
             let children = edge.isLeading ? [new, node] : [node, new]
             return .split(Split(axis: edge.axis, children: children))
         }
         guard case .split(var split) = node else { return node }
         if split.axis == edge.axis, let i = split.children.firstIndex(where: { $0.id == target }) {
-            let half = split.weights[i] / 2
-            split.weights[i] = half
             let at = edge.isLeading ? i : i + 1
-            split.children.insert(new, at: at)
-            split.weights.insert(half, at: at)
+            switch share {
+            case .equal:
+                insertEqually(new, into: &split, at: at)
+            case .halveTarget:
+                let half = split.weights[i] / 2
+                split.weights[i] = half
+                split.children.insert(new, at: at)
+                split.weights.insert(half, at: at)
+            }
             return .split(split)
         }
-        split.children = split.children.map { placing(new, at: edge, of: target, in: $0) }
+        split.children = split.children.map { placing(new, at: edge, of: target, in: $0, share: share) }
         return .split(split)
+    }
+
+    static func insertEqually(_ new: Node, into split: inout Split, at index: Int) {
+        let n = Double(split.children.count)
+        var fractions = split.fractions.map { $0 * n / (n + 1) }
+        fractions.insert(1 / (n + 1), at: index)
+        split.children.insert(new, at: index)
+        split.weights = fractions
     }
 
     /// Takes `window` out of its stack without normalizing (so node IDs stay put).
@@ -276,24 +302,43 @@ public struct LayoutTree: Equatable, Codable, Sendable {
         return .split(split)
     }
 
-    /// Drops empty stacks and splits, and replaces single-child splits with their child.
+    /// Canonical form:
+    /// - empty stacks and splits are dropped, and a vanished child's whole share goes to its next surviving
+    ///   sibling (or the previous one if it was last), so one neighbor grows instead of everyone shifting;
+    /// - a child split running along its parent's axis is flattened into the parent, keeping geometry;
+    /// - a single-child split is replaced by its child.
     static func normalized(_ node: Node) -> Node? {
         switch node {
         case .stack(let stack):
             return stack.windows.isEmpty ? nil : node
         case .split(var split):
+            let results = split.children.map(normalized)
+            var weights = split.weights.map { $0.isFinite && $0 > 0 ? $0 : 0.001 }
+
+            for (i, result) in results.enumerated() where result == nil {
+                let next = (i + 1..<results.count).first { results[$0] != nil }
+                let previous = (0..<i).last { results[$0] != nil }
+                if let heir = next ?? previous { weights[heir] += weights[i] }
+            }
+
             var children: [Node] = []
-            var weights: [Double] = []
-            for (child, weight) in zip(split.children, split.weights) {
-                if let kept = normalized(child) {
-                    children.append(kept)
-                    weights.append(weight)
+            var kept: [Double] = []
+            for (i, result) in results.enumerated() {
+                guard let child = result else { continue }
+                if case .split(let inner) = child, inner.axis == split.axis {
+                    for (grandchild, fraction) in zip(inner.children, inner.fractions) {
+                        children.append(grandchild)
+                        kept.append(weights[i] * fraction)
+                    }
+                } else {
+                    children.append(child)
+                    kept.append(weights[i])
                 }
             }
             if children.isEmpty { return nil }
             if children.count == 1 { return children[0] }
             split.children = children
-            split.weights = weights
+            split.weights = kept
             return .split(split)
         }
     }

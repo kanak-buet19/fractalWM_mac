@@ -65,11 +65,25 @@ private func close(_ a: [Double], _ b: [Double]) -> Bool {
 }
 
 @Suite struct DockTests {
-    @Test func dockAlongParentAxisAddsSiblingWithHalfTheTargetsShare() {
+    @Test func dockAlongParentAxisAddsSiblingWithAnEqualShare() {
         var t = tree(2) // H(1 | 2)
         t.dock(w(3), at: .right, of: stackID(t, 2))
         #expect(t.summary == "H(1 | 2 | 3)")
-        #expect(close(fractions(t), [0.5, 0.25, 0.25]))
+        #expect(close(fractions(t), [1.0 / 3, 1.0 / 3, 1.0 / 3]))
+    }
+
+    @Test func equalShareKeepsExistingProportions() {
+        var t = tree(2)
+        t.resizeSeam(in: t.root!.id, after: 0, by: 0.25) // [0.75, 0.25]
+        t.dock(w(3), at: .right, of: stackID(t, 2))
+        #expect(close(fractions(t), [0.5, 1.0 / 6, 1.0 / 3]))
+    }
+
+    @Test func dockOnRootEdgeAlongItsAxisJoinsTheSplit() {
+        var t = tree(2) // H(1 | 2)
+        t.dock(w(3), at: .left, of: t.root!.id)
+        #expect(t.summary == "H(3 | 1 | 2)")
+        #expect(close(fractions(t), [1.0 / 3, 1.0 / 3, 1.0 / 3]))
     }
 
     @Test func dockLeftInsertsBeforeTarget() {
@@ -125,6 +139,31 @@ private func close(_ a: [Double], _ b: [Double]) -> Bool {
         t.remove(w(1))
         #expect(t.root == nil)
         #expect(t.summary == "∅")
+    }
+
+    @Test func removedSpaceGoesToTheNextSibling() {
+        var t = tree(2)
+        t.dock(w(3), at: .right, of: stackID(t, 2)) // H(1 | 2 | 3), thirds
+        t.remove(w(2))
+        #expect(t.summary == "H(1 | 3)")
+        #expect(close(fractions(t), [1.0 / 3, 2.0 / 3]))
+    }
+
+    @Test func removedLastChildsSpaceGoesToThePreviousSibling() {
+        var t = tree(2)
+        t.dock(w(3), at: .right, of: stackID(t, 2))
+        t.remove(w(3))
+        #expect(close(fractions(t), [1.0 / 3, 2.0 / 3]))
+    }
+
+    @Test func emptiedSubtreeGivesItsSpaceToItsNeighbor() {
+        // H(V(1 / 3) | 2 | 4): removing 1 and 3 empties the first group; 2 takes its share.
+        var t = tree(3) // H(V(1 / 3) | 2)
+        t.dock(w(4), at: .right, of: stackID(t, 2)) // thirds
+        t.remove(w(1))
+        t.remove(w(3))
+        #expect(t.summary == "H(2 | 4)")
+        #expect(close(fractions(t), [2.0 / 3, 1.0 / 3]))
     }
 
     @Test func removingUnknownWindowChangesNothing() {
@@ -190,9 +229,9 @@ private func close(_ a: [Double], _ b: [Double]) -> Bool {
 
     @Test func resizeOnlyTouchesTheTwoNeighbors() {
         var t = tree(2)
-        t.dock(w(3), at: .right, of: stackID(t, 2)) // [0.5, 0.25, 0.25]
+        t.dock(w(3), at: .right, of: stackID(t, 2)) // thirds
         t.resizeSeam(in: t.root!.id, after: 1, by: 0.1)
-        #expect(close(fractions(t), [0.5, 0.35, 0.15]))
+        #expect(close(fractions(t), [1.0 / 3, 1.0 / 3 + 0.1, 1.0 / 3 - 0.1]))
     }
 
     @Test func resizeWithBadIndexChangesNothing() {
@@ -200,6 +239,38 @@ private func close(_ a: [Double], _ b: [Double]) -> Bool {
         let before = t
         t.resizeSeam(in: t.root!.id, after: 5, by: 0.1)
         #expect(t == before)
+    }
+}
+
+@Suite struct NormalizeTests {
+    private func stack(_ n: Int) -> Node { .stack(Stack(windows: [w(n)])) }
+
+    @Test func sameAxisChildSplitIsFlattenedKeepingGeometry() {
+        let inner = Split(axis: .horizontal, children: [stack(2), stack(3)])
+        let t = LayoutTree(root: .split(Split(axis: .horizontal, children: [stack(1), .split(inner)])))
+        #expect(t.summary == "H(1 | 2 | 3)")
+        #expect(close(fractions(t), [0.5, 0.25, 0.25]))
+    }
+
+    @Test func crossAxisChildSplitIsKept() {
+        let inner = Split(axis: .vertical, children: [stack(2), stack(3)])
+        let t = LayoutTree(root: .split(Split(axis: .horizontal, children: [stack(1), .split(inner)])))
+        #expect(t.summary == "H(1 | V(2 / 3))")
+    }
+
+    @Test func collapseThenFlatten() {
+        // H(1 | V(H(2 | 3))) — the V has one child, collapses to H(2 | 3), which then flattens.
+        let h23 = Split(axis: .horizontal, children: [stack(2), stack(3)])
+        let v = Split(axis: .vertical, children: [.split(h23)])
+        let t = LayoutTree(root: .split(Split(axis: .horizontal, children: [stack(1), .split(v)])))
+        #expect(t.summary == "H(1 | 2 | 3)")
+    }
+
+    @Test func badWeightsAreRepaired() {
+        let t = LayoutTree(root: .split(
+            Split(axis: .horizontal, children: [stack(1), stack(2)], weights: [.nan, -1])
+        ))
+        #expect(close(fractions(t), [0.5, 0.5]))
     }
 }
 

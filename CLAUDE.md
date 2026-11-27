@@ -72,8 +72,15 @@ Keep these layers separate. The model and the layout engine never import AppKit.
 1. **Model (`LayoutTree`).** Pure value types.
    - `Split { axis: .horizontal/.vertical, weights: [Double], children: [Node] }`
    - `Stack { windows: [WindowID], active: Int }`, a tab group. A plain docked window is a one-item stack.
-   - Operations: insert, dock(at: edge of node), remove, move, resizeSeam, normalize. Normalize collapses a
-     single-child split and drops an empty stack.
+   - Operations: insert, dock(at: edge of node), addTab, activate, remove, resizeSeam, normalize.
+   - Normalize does three things:
+     - It drops empty stacks and collapses single-child splits.
+     - It **flattens a child split that runs along its parent's axis** into the parent, keeping the geometry.
+     - It gives a vanished child's whole share to its **next** surviving sibling, or the previous one if it was
+       last. The space is not shared out proportionally.
+   - `dock` along the parent's axis inserts with an **equal share**: the newcomer gets 1/(n+1) and the others
+     scale by n/(n+1). Across the axis, it wraps the target 50/50. `insert` (automatic placement) halves the
+     target instead.
    - Each display has its own tree.
    - Unit-test every operation.
 2. **Layout engine.** A pure function `(tree, rect, gap) -> [WindowID: CGRect]`.
@@ -93,9 +100,9 @@ Keep these layers separate. The model and the layout engine never import AppKit.
      resized, destroyed, focused).
 4. **Coordinates.** The Accessibility API uses a top-left origin, while AppKit and `NSScreen` use bottom-left.
    Convert in exactly one place, inside `AXBackend`.
-5. **Interaction.**
-   - Drag-to-dock: a global mouse monitor tracks window drags. Near a screen or node edge, a translucent
-     overlay `NSPanel` shows the drop zone. On release, call `dock`.
+5. **Interaction.** See "Interaction spec" below for the exact rules.
+   - Drag-to-dock: track window drags (mouse monitor plus move notifications). Show the drop target with a
+     preview, and on release call `dock` or `addTab`.
    - Seam resize: invisible handle windows sit over the gaps between siblings. Dragging one updates `weights`.
    - Hotkeys: focus neighbor, zoom in/out, show all, save/recall view.
 6. **Navigation / zoom.**
@@ -107,13 +114,75 @@ Keep these layers separate. The model and the layout engine never import AppKit.
 8. **Kill switch.** A hotkey plus a menu item that stops managing windows and "floats all". Build it in the first
    milestone.
 9. **Motion (`Animator`, app target).** Every layout change goes through it.
-   - It finishes any running motion and reads current frames.
+   - **Interruptions retarget smoothly.** A change that arrives mid-motion starts from where each stand-in is
+     drawn right now, never by jumping to the end.
    - For each window that moves, it puts a borderless stand-in window at the old frame and hides the real window.
    - It animates the stand-ins to their new frames, then places the real windows and removes the stand-ins.
    - Stand-ins show `appearance.snapshot` when one exists, otherwise a color-and-label placeholder.
    - "Hidden" depends on the backend. `DummyBackend` sets alpha to 0. `AXBackend` parks the window off-screen,
      because the Accessibility API can't change another app's alpha.
    - Never step real windows frame by frame through the Accessibility API; it is jerky.
+
+## Interaction spec
+
+These rules were learned by reading `reference/trellis` for behavior only (no code copied). File references
+point there.
+
+**Drag-to-dock (milestone 3)** (`runtime/drag.ts`, `model/spatial.ts`)
+- **Starting a drag:**
+  - A drag starts after the pointer moves **6 px**.
+  - Nothing reflows at pickup. On the first drop target, the source's slot collapses and its neighbors close
+    the gap. It doesn't reopen during that drag.
+- **Hit-testing:** use the **stable layout rects** (the layout at pickup, recomputed once when the source
+  collapses), never the animating preview. That avoids oscillation.
+- **Drop zones on a tile:**
+  - Normalize the pointer to the tile (0–1) and find the nearest edge.
+  - Within **0.28** of it, dock on that edge. Otherwise you're in the centre (the middle 44%×44%), which adds
+    the window as a tab.
+  - Corners split along the diagonals.
+- **Seams:** the gap between siblings is a target (hit radius max(gap/2, 4 px)).
+  - The nearest seam wins, and a seam beats a tile edge.
+  - A tile edge that runs along its parent's axis *is* that seam. Dropping on it inserts between the whole groups
+    on either side, with an equal share.
+  - Skip a seam whose group contains only the dragged window.
+- **Outer band:** within max(2×gap, 8 px) of the display edge, the drop docks beside the **whole current view**
+  (the root, or the zoomed group). Same axis gives an equal share; otherwise it wraps the view. This beats
+  everything else.
+- **No flicker:** a target must stay the same for **150 ms** before the preview changes. Release commits the
+  current candidate immediately.
+- **Preview:** a real reflow. Insert a placeholder into a preview tree, lay it out, and animate tiles to their
+  preview frames, with the drop slot growing open from the seam or edge.
+- **Cancel:** Escape, or releasing with no target. The tree is restored and the window glides back.
+- **Targets are identified by the set of windows they contain**, not node IDs, so they survive the tree
+  restructuring caused by removing the source.
+
+**Seam resize (milestone 3)** (`model/resize.ts`)
+- **Handle:** max(8, gap + 4) px thick. Hide handles while anything is moving.
+- **Pixel minimums:** tiles are at least **80 px** wide and title-bar height + 28 px tall. In the layout, pin
+  undersized children at their minimum and re-share the rest by weight.
+- **Push model:**
+  - Every boundary on the drag axis, across the whole tree, sits on one line.
+  - Dragging a seam pushes the nearest boundaries outward through nested groups as minimums are hit. The
+    display edges never move.
+  - Rewrite weights only for groups whose proportions changed.
+  - The seam follows the pointer at the grab offset, with no jump.
+  - Commit on release, without animation.
+- **Double-click** a seam to give its two neighbors equal shares (animated).
+- **Keyboard:** arrows move a seam by **2%**, or **10%** with Shift.
+
+**Zoom and navigation (milestone 4 onward)** (`runtime/navigation.ts`, `model/spatial.ts`)
+- **What zoom means:** zooming frames a node, or a contiguous range of siblings in a split of 3 or more. That
+  group fills the display, and everything else is parked.
+- **Maximize toggle:** it returns to the exact prior framing, or the nearest surviving ancestor.
+- **Back/forward history:** capped at **100** entries. Each entry is stored as the set of windows it contained.
+- **Show everything:** frames the root and remembers where to return to.
+- **Widening the view:** opening or focusing a window outside the current view widens the framing to the
+  smallest node containing both.
+- **Tiny tiles:** tiles under **160×64** become icon tiles. Nested groups whose parts are all under 48×48
+  collapse into one tile.
+- **Pinch:** snaps to the best fit **180 ms** after the last pinch event. Score each candidate as
+  |log w-ratio| + |log h-ratio| + 2.5 × the normalized centre distance, and pick the lowest.
+- **Directional focus** (left, right, up, down) isn't in Trellis. Design it ourselves.
 
 ## Milestones
 

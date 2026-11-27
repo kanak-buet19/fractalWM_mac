@@ -22,6 +22,31 @@ the user zoom into any part of that tree. It is for personal use only.
 - Global hotkeys come from the `KeyboardShortcuts` Swift package.
 - No other dependencies unless clearly justified.
 
+## Features
+
+This is the full target feature set, modeled on what trelliswm.app offers. There are no paid tiers: every
+feature is included and there is no window limit.
+
+- **Docking.** Drag a window to a screen edge to dock it. Docked windows tile, and spaces nest inside spaces to
+  any depth.
+- **Pinch zoom.** ⌥ + trackpad pinch anywhere zooms the real desktop in and out of the layout tree. This needs a
+  `CGEventTap` that catches magnify gesture events.
+- **Show everything.** ⌃⌥Space zooms out to the whole tree.
+- **Live previews.** While zoomed out or zooming, windows show live thumbnails via ScreenCaptureKit.
+- **Tab groups.** Stack several windows under one tab strip, drawn as an overlay panel above the active window.
+- **Resize at the seams.** Dragging the gap between two windows resizes both.
+- **Keyboard navigation.** Move focus between neighbors, zoom in and out, and move windows between nodes, all
+  from hotkeys.
+- **Menu-bar navigation.** The menu-bar item offers back/forward through the zoom history, jumps to saved views,
+  and shows a mini map of the tree.
+- **Saved views.** ⌃⌥⇧ + a number saves the current viewport. ⌃⌥ + the same number returns to it.
+- **Per-display arrangements.** Each display keeps its own tree, and every tree is restored after a restart.
+- **All displays.** Works across multiple monitors and handles displays being plugged in or unplugged.
+- **URL commands.** A `fractalwm://` URL scheme, e.g. `fractalwm://view?n=1`, `fractalwm://zoom?dir=out` or
+  `fractalwm://float-all`. These let Raycast, Alfred, Shortcuts, Stream Deck and the shell drive the app.
+- **Float all windows.** One command undocks every window and returns to a normal Mac. This is also the kill
+  switch.
+
 ## Architecture
 
 Keep these layers separate. The model and the layout engine never import AppKit.
@@ -67,11 +92,12 @@ Keep these layers separate. The model and the layout engine never import AppKit.
 1. Menu-bar app with the kill switch, and `DummyBackend` spawning 6 colored windows.
 2. `LayoutTree` with unit tests, and the layout engine tiling the dummy windows.
 3. Seam resize and drag-to-dock on dummy windows.
-4. Stacks (tab groups) and zoom/viewport navigation.
+4. Tab groups, zoom/viewport navigation, keyboard navigation and show-everything.
 5. `AXBackend`: permission prompt, listing windows, tiling real windows (in the VM only), and an allowlist of
    bundle IDs to manage.
-6. AX observers, persistence and multiple displays.
-7. Animated zoom with ScreenCaptureKit.
+6. AX observers, persistence, and per-display arrangements across all displays.
+7. Saved views, menu-bar navigation (back/forward) and URL commands.
+8. Pinch zoom, plus live previews and animated zoom with ScreenCaptureKit.
 
 ## Dev loop
 
